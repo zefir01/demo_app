@@ -1,0 +1,45 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "*"
+    tags:
+      - "*"
+
+env:
+  ECR: 109719059341.dkr.ecr.us-west-2.amazonaws.com/zefir01-demo-app
+  ROLE: "arn:aws:iam::109719059341:role/github-ecr-zefir01-demo-app-20251029154720056300000001"
+
+jobs:
+  build:
+    name: Build Image
+    runs-on: eks-org-runners
+    permissions:
+      id-token: write
+      contents: read
+   
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v2
+
+    - name: Expose git commit data
+      uses: rlespinasse/git-commit-data-action@v1
+
+    - name: Set tag env
+      run: |
+        echo "TAG=${ECR}:${{ github.run_number }}" >> $GITHUB_ENV
+
+    - name: Docker build
+      run: |
+        docker build -t $TAG .
+
+    - name: Push to ECR and Argo
+      uses: ./.github/actions/argo-push
+      with:
+        aws-role: ${{ env.ROLE }}
+        aws-ecr-uri: ${{ env.ECR }}
+        ssh-key: ${{ secrets.ARGOCD_REPO_SSH }}
+        service: demo-app
+        image: ${{ env.TAG }}

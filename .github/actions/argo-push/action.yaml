@@ -1,0 +1,80 @@
+name: argo-push
+description: 'Push image tag to argo repo'
+inputs:
+  aws-role:
+    description: "AWS role for push to ECR"
+    required: true
+  aws-region:
+    description: "AWS region to login"
+    required: false
+    default: us-west-2
+  aws-role-duration-seconds:
+    description: "Role TTL"
+    required: false
+    default: "900"
+  aws-ecr-uri:
+    description: "AWS ECR uri or docker tag"
+    required: true
+  ssh-key:
+    description: 'SSH key to access to argo repo'
+    required: true
+  service:
+    description: "Service name"
+    required: true
+  image:
+    description: "Image tag to push"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: AWS cli install action
+      uses: chrislennon/action-aws-cli@1.1
+
+    - name: Configure aws credentials
+      uses: aws-actions/configure-aws-credentials@v5
+      with:
+        role-to-assume: ${{ inputs.aws-role }}
+        role-duration-seconds: ${{ inputs.aws-role-duration-seconds }} # the ttl of the session, in seconds.
+        aws-region: ${{ inputs.aws-region }}
+
+
+    - name: ECR login
+      shell: bash
+      run: aws ecr get-login-password --region ${{ inputs.aws-region }} | docker login --username AWS --password-stdin ${{ inputs.aws-ecr-uri }}
+
+    - name: Push image
+      shell: bash
+      run: docker push ${{ inputs.image }}
+
+    - name: Expose git commit data
+      uses: rlespinasse/git-commit-data-action@v1
+
+    - name: Clone Argo repo
+      uses: actions/checkout@v3
+      with:
+        repository: 'zefir01/argo_test'
+        ref: main
+        ssh-key: ${{ inputs.ssh-key }}
+        path: argo
+
+    - name: Set GIT_TAG env
+      shell: bash
+      run: |
+        echo "GIT_TAG=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+
+    - name: Write TAG to argo
+      shell: bash
+      run: |
+        set -e
+        set -x
+        export TARGET_FILE=revisions.yaml
+        cd argo
+        git config user.email "${{ env.GIT_COMMIT_AUTHOR_EMAIL }}"
+        git config user.name "${{ env.GIT_COMMIT_AUTHOR_NAME }}"
+        chmod 0777 .
+        touch env.yaml
+        chmod 0666 $TARGET_FILE
+        docker run --rm -v "${PWD}":/workdir -e IMAGE=${{ inputs.image }} mikefarah/yq e ".${{ inputs.service }}.\"${{ github.ref_name }}\" = \"${{ inputs.image }}\"" -P -i $TARGET_FILE
+        chmod 0666 $TARGET_FILE
+        cat $TARGET_FILE
+        git add $TARGET_FILE && git commit -m "${{ env.GIT_COMMIT_MESSAGE_SUBJECT }} ${{ env.GIT_COMMIT_SHORT_SHA }}" && git push
